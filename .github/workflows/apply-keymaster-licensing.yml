@@ -33,6 +33,21 @@ jobs:
           node --check content/cleaner.js
           node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8')); console.log('manifest ok')"
 
+      - name: Package extension
+        run: |
+          rm -rf kfs-extension-v1.9.0
+          mkdir kfs-extension-v1.9.0
+          rsync -a --exclude='.git' --exclude='kfs-extension-v1.9.0' ./ kfs-extension-v1.9.0/
+          zip -qr kfs-extension-v1.9.0.zip kfs-extension-v1.9.0
+
+      - name: Upload extension package
+        uses: actions/upload-artifact@v4
+        with:
+          name: kfs-extension-v1.9.0
+          path: kfs-extension-v1.9.0.zip
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Commit integration
         run: |
           git config user.name "github-actions[bot]"
