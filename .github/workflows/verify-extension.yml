@@ -19,3 +19,15 @@ jobs:
           for f in $(find . -type f \( -name "*.js" -o -name "*.mjs" \) -not -path './.git/*'); do node --check "$f"; done
       - name: Validate startup architecture and integrity
         run: node scripts/verify-startup-architecture.mjs
+      - name: Package extension
+        run: |
+          mkdir -p dist
+          zip -r "dist/kfs-extension-v1.9.0-${GITHUB_SHA}.zip" \
+            manifest.json background.js licensing.js license-ui.js license.html \
+            popup.html popup.js popup.css content styles assets
+      - name: Upload extension package
+        uses: actions/upload-artifact@v4
+        with:
+          name: kfs-extension-v1.9.0-${{ github.sha }}
+          path: dist/kfs-extension-v1.9.0-${{ github.sha }}.zip
+          if-no-files-found: error
