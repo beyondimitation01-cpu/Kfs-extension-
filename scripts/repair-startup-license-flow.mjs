@@ -61,7 +61,7 @@ if(!bg.includes('KFS_GATE_CONTINUE')){
 const gateHash='2db624574f771ca2dc99349e217dc83be37a3cd874f3db4d15cf4bf7667fe2e0';
 const licenseHash='c9c9c684b3480487bbd9be16ff921a45d3540d187966900337604c530f0c469d';
 bg=bg.replace(/("content\/gate\.js":")[0-9a-f]{64}("\s*,)/, `$1${gateHash}$2`);
-bg=bg.replace(/("content\/license-gate\.js":")[0-9a-f]{64}("\s*,)/, `$1${licenseHash}$2`);
+if(bg.includes('"content/license-gate.js"')){bg=bg.replace(/("content\/license-gate\.js":")[0-9a-f]{64}("\s*,)/, `$1${licenseHash}$2`)}else{bg=bg.replace(/("content\/gate\.js":"[0-9a-f]{64}",)("content\/lovable\.js)/, `$1"content/license-gate.js":"${licenseHash}",$2`)}
 must(bg.includes(gateHash),'gate integrity hash not updated');
 must(bg.includes(licenseHash),'license-gate integrity hash not updated');
 write('background.js',bg);
