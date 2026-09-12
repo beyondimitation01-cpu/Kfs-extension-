@@ -26,8 +26,9 @@ if(!bg.includes(brandNeedle))throw new Error("branding anchor missing");
 bg=bg.replace(brandNeedle,'if(message.type==="KFS_REMOVE_LOVABLE_BRANDING"){if(!await gateAllowsExecution())return sendResponse({ok:false,reason:"startup_gate",message:"Conclua a tela de acesso da Killers from Sagres."});{const denial=await kfsLicenseDenial();if(denial)return sendResponse(denial);}');
 
 const saveNeedle='if(message.type==="KFS_SAVE_CONFIG"){const allowed=';
-if(!bg.includes(saveNeedle))throw new Error("KFS_SAVE_CONFIG anchor missing");
-bg=bg.replace(saveNeedle,'if(message.type==="KFS_SAVE_CONFIG"){if(message.patch?.hideLovableBranding===true){const denial=await kfsLicenseDenial();if(denial)return sendResponse(denial);}const allowed=');
+const guardedSaveNeedle='if(message.type==="KFS_SAVE_CONFIG"){if(message.patch?.hideLovableBranding===true){const denial=await kfsLicenseDenial();if(denial)return sendResponse(denial);}const allowed=';
+if(!bg.includes(saveNeedle)&&!bg.includes(guardedSaveNeedle))throw new Error("KFS_SAVE_CONFIG anchor missing");
+if(bg.includes(saveNeedle))bg=bg.replace(saveNeedle,guardedSaveNeedle);
 
 const licensingMessages='if(message.type==="KFS_LICENSE_STATUS")return sendResponse(await getLicenseStatus());if(message.type==="KFS_LICENSE_TRIAL")return sendResponse(await startTrial("1.9.0"));if(message.type==="KFS_LICENSE_ACTIVATE")return sendResponse(await activateLicense(message.license_key,"1.9.0"));if(message.type==="KFS_LICENSE_DEACTIVATE")return sendResponse(await deactivateLicense("1.9.0"));';
 const messageAnchor='if(message.type==="KFS_GATE_STATUS")return sendResponse(await getGateState());';
