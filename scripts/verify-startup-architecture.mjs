@@ -1,7 +1,9 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 
 const read=(path)=>fs.readFileSync(path,"utf8");
 const fail=(message)=>{throw new Error(message)};
+const sha256=(path)=>crypto.createHash("sha256").update(read(path)).digest("hex");
 const manifest=JSON.parse(read("manifest.json"));
 
 if(manifest.manifest_version!==3)fail("manifest_version must be 3");
@@ -39,6 +41,8 @@ for(const path of expectedPaths){
   if(!fs.existsSync(path))fail(`integrity target missing: ${path}`);
   const hash=integrityMap.get(path);
   if(!hash)fail(`integrity hash missing: ${path}`);
+  if(!/^[a-f0-9]{64}$/.test(hash))fail(`integrity hash malformed: ${path}`);
+  if(sha256(path)!==hash)fail(`integrity hash mismatch: ${path}`);
 }
 if(integrityMap.size<expectedPaths.length)fail("startup integrity map is incomplete");
 
