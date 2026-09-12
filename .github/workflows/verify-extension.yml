@@ -1,0 +1,29 @@
+name: Verify extension
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Check JavaScript syntax
+        run: |
+          node --check background.js
+          node --check licensing.js
+          node --check license-ui.js
+          node --check popup.js
+          node --check content/license-gate.js
+          node --check content/gate.js
+          node --check content/lovable.js
+          node --check content/cleaner.js
+          node --check content/chatgpt.js
+      - name: Validate manifest
+        run: node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('manifest.json','utf8'));if(m.manifest_version!==3)throw new Error('manifest_version must be 3');if(!m.permissions.includes('alarms'))throw new Error('alarms permission missing');if(!m.content_scripts?.some(x=>(x.js||[]).includes('content/license-gate.js')))throw new Error('license gate content script missing');console.log('manifest OK')"
