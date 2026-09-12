@@ -2,7 +2,7 @@ name: Verify extension
 
 on:
   push:
-    branches: [main, fix/startup-license-mobile-flow]
+    branches: [main, fix/startup-license-mobile-flow, fix/final-startup-verification]
   pull_request:
     branches: [main]
 
@@ -17,26 +17,5 @@ jobs:
       - name: Check JavaScript syntax
         run: |
           for f in $(find . -type f \( -name "*.js" -o -name "*.mjs" \) -not -path './.git/*'); do node --check "$f"; done
-      - name: Validate extension architecture
-        run: |
-          node - <<'NODE'
-          const fs=require('fs');
-          const m=JSON.parse(fs.readFileSync('manifest.json','utf8'));
-          if(m.manifest_version!==3)throw new Error('manifest_version must be 3');
-          if(!m.options_ui?.page||m.options_ui.open_in_tab!==true)throw new Error('license options page missing');
-          if(!m.host_permissions.includes('https://kfs-keymaster.lovable.app/*'))throw new Error('Keymaster host permission missing');
-          if(!m.content_scripts?.some(x=>(x.js||[]).includes('content/license-gate.js')))throw new Error('license gate missing');
-          if(!fs.existsSync('license.html'))throw new Error('license.html missing');
-          if(!fs.existsSync('assets/gate/tutorial.mp4'))throw new Error('local tutorial missing');
-          const gate=fs.readFileSync('content/gate.js','utf8');
-          const lg=fs.readFileSync('content/license-gate.js','utf8');
-          const bg=fs.readFileSync('background.js','utf8');
-          const css=fs.readFileSync('popup.css','utf8');
-          if(!gate.includes('const LOCAL_VIDEO='))throw new Error('startup gate is not local-first');
-          if(gate.includes('KFS_MEDIA_ENSURE'))throw new Error('remote media ensure remains in startup gate');
-          if(lg.includes('window.open('))throw new Error('fragile window.open remains in license gate');
-          if(!bg.includes('KFS_OPEN_LICENSE_UI')||!bg.includes('KFS_GATE_CONTINUE'))throw new Error('background startup handlers missing');
-          if(!bg.includes('"content/license-gate.js":"c9c9c684b3480487bbd9be16ff921a45d3540d187966900337604c530f0c469d"'))throw new Error('license-gate integrity hash missing');
-          if(!css.includes('height:590px')||css.includes('min-height:682px'))throw new Error('popup sizing not repaired');
-          console.log('architecture OK');
-          NODE
+      - name: Validate startup architecture and integrity
+        run: node scripts/verify-startup-architecture.mjs
