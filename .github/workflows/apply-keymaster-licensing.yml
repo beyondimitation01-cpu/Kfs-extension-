@@ -1,0 +1,46 @@
+name: Apply Keymaster licensing integration
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Apply integration
+        run: node scripts/apply-keymaster-licensing.mjs
+
+      - name: Validate syntax and manifest
+        run: |
+          node --check background.js
+          node --check licensing.js
+          node --check license-ui.js
+          node --check content/cleaner.js
+          node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8')); console.log('manifest ok')"
+
+      - name: Commit integration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add background.js content/cleaner.js manifest.json popup.html
+          if git diff --cached --quiet; then
+            echo "No integration changes required"
+            exit 0
+          fi
+          git commit -m "feat: enforce Keymaster licensing in extension"
+          git push
