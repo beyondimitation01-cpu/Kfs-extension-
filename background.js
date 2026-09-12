@@ -41,3 +41,4 @@ FINAL RESPONSE CONTRACT:
 
 void initializeLicensing();
 chrome.alarms.onAlarm.addListener((alarm)=>{if(alarm?.name===LICENSE_REFRESH_ALARM)void refreshLease("1.9.0");});
+chrome.tabs.onUpdated.addListener((tabId,change,tab)=>{if(change.status!=="complete"||!/^https:\/\/(?:[^/]+\.)?lovable\.dev\//i.test(tab?.url||""))return;void getLicenseStatus().then(status=>{if(!status?.entitled)void openLicenseUi()})});
