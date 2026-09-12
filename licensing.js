@@ -25,7 +25,6 @@ export async function getInstallationId(){
 }
 
 async function readState(){return chrome.storage.local.get(STORAGE_KEYS);}
-async function writeState(patch){await chrome.storage.local.set(patch);return readState();}
 
 function parseServerTime(value){const t=Date.parse(String(value||""));return Number.isFinite(t)?t:0;}
 function safeDate(value){const t=Date.parse(String(value||""));return Number.isFinite(t)?new Date(t).toISOString():"";}
@@ -37,14 +36,19 @@ async function recordServerTime(serverTime){
   const previous=await chrome.storage.local.get(["last_server_time","last_local_wall_time"]);
   const previousLocal=Number(previous.last_local_wall_time)||0;
   const rollback=previousLocal>0&&localMs<previousLocal-CLOCK_TOLERANCE_MS;
-  await chrome.storage.local.set({last_server_time:new Date(serverMs).toISOString(),last_local_wall_time:localMs,clock_rollback_detected:rollback||previous.clock_rollback_detected===true});
+  await chrome.storage.local.set({
+    last_server_time:new Date(serverMs).toISOString(),
+    last_local_wall_time:localMs,
+    clock_rollback_detected:rollback
+  });
   return {rollback};
 }
 
 async function post(path,payload){
   try{
     const response=await fetch(`${API_BASE}/${path}`,{method:"POST",headers:{"content-type":"application/json","x-kfs-client":"kfs-extension/1.9"},cache:"no-store",body:JSON.stringify(payload)});
-    let body=null;try{body=await response.json()}catch(_){body={ok:false,code:"INVALID_RESPONSE",message:"Servidor de licenciamento retornou uma resposta inválida."};}
+    let body=null;
+    try{body=await response.json()}catch(_){body={ok:false,code:"INVALID_RESPONSE",message:"Servidor de licenciamento retornou uma resposta inválida."};}
     if(body?.server_time)await recordServerTime(body.server_time);
     return {http:response.status,body};
   }catch(error){return {network:true,error:String(error?.message||error)}}
@@ -66,10 +70,15 @@ async function persistSuccess(body){
   const license=normalizedLicense(body);
   const leaseToken=text(body?.lease_token,4096);
   const leaseExpires=safeDate(body?.lease_expires_at);
-  const patch={license_plan:license.plan,license_status:license.status,license_expires_at:license.expires_at,last_validation_at:now()};
+  const patch={
+    license_plan:license.plan,
+    license_status:license.status,
+    license_expires_at:license.expires_at,
+    last_validation_at:now(),
+    clock_rollback_detected:false
+  };
   if(leaseToken)patch.lease_token=leaseToken;
   if(leaseExpires)patch.lease_expires_at=leaseExpires;
-  if(body?.server_time)await recordServerTime(body.server_time);
   await chrome.storage.local.set(patch);
   await ensureRefreshAlarm();
   return readState();
@@ -109,78 +118,73 @@ export async function deactivateLicense(clientVersion="1.9.0"){
 
 function mapFailure(body){
   const code=text(body?.code,64)||"LICENSING_ERROR";
-  const state=code==="REVOKED"?"REVOKED":code==="EXPIRED"?"EXPIRED":code==="LEASE_EXPIRED"?"LEASE_EXPIRED":code==="ALREADY_ACTIVATED"?"ALREADY_ACTIVATED":code==="INSTALLATION_MISMATCH"?"INSTALLATION_MISMATCH":code==="LEASE_INVALID"?"LEASE_INVALID":code==="NOT_ACTIVATED"?"NOT_ACTIVATED":"NOT_ACTIVATED";
+  const state=code==="REVOKED"?"REVOKED":code==="EXPIRED"?"EXPIRED":code==="LEASE_EXPIRED"?"LEASE_EXPIRED":code==="ALREADY_ACTIVATED"?"ALREADY_ACTIVATED":code==="INSTALLATION_MISMATCH"?"INSTALLATION_MISMATCH":code==="LEASE_INVALID"?"LEASE_INVALID":code==="RATE_LIMITED"?"RATE_LIMITED":code==="TRIAL_ALREADY_USED"?"TRIAL_ALREADY_USED":code==="INVALID_KEY"?"INVALID_KEY":"NOT_ACTIVATED";
   return {ok:false,state,code,message:text(body?.message,512)||code,server_time:safeDate(body?.server_time)};
 }
 
-export async function validateLicense(clientVersion="1.9.0",force=false){
+export async function validateLicense(clientVersion="1.9.0"){
   const state=await readState();
   if(!state.license_key)return {ok:true,entitled:false,state:"NOT_ACTIVATED"};
   const installation_id=await getInstallationId();
-  const result=await post("validate",{license_key:text(state.license_key,256),installation_id,lease_token:text(state.lease_token,4096)||undefined,client_version:text(clientVersion,32)});
-  if(result.network){
-    const local=await evaluateLocalLease();
-    return force?{...local,state:local.entitled?local.state:"NETWORK_UNAVAILABLE",networkUnavailable:true}:{...local,networkUnavailable:true};
-  }
+  const payload={license_key:text(state.license_key,256),installation_id,client_version:text(clientVersion,32)};
+  if(state.lease_token)payload.lease_token=text(state.lease_token,4096);
+  const result=await post("validate",payload);
+  if(result.network)return {ok:false,entitled:false,state:"NETWORK_UNAVAILABLE",message:"Não foi possível validar a licença com o servidor."};
   if(!result.body?.ok){
     const failure=mapFailure(result.body);
     await chrome.storage.local.set({license_status:failure.state,last_validation_at:now()});
     return {...failure,entitled:false};
   }
   await persistSuccess(result.body);
-  const evaluated=await evaluateLocalLease();
-  return {ok:true,...evaluated,license:normalizedLicense(result.body)};
+  const license=normalizedLicense(result.body);
+  const status=license.status.toUpperCase();
+  const entitled=status!=="REVOKED"&&status!=="EXPIRED"&&license.activated===true;
+  return {ok:true,entitled,state:entitled?(status==="TRIAL"||status==="TRIAL_ACTIVE"?"TRIAL_ACTIVE":"LICENSE_ACTIVE"):"NOT_ACTIVATED",plan:license.plan,expires_at:license.expires_at,lease_expires_at:safeDate(result.body.lease_expires_at),license};
 }
 
 export async function refreshLease(clientVersion="1.9.0"){
   if(refreshPromise)return refreshPromise;
   refreshPromise=(async()=>{
     const state=await readState();
-    if(!state.license_key||!state.lease_token)return validateLicense(clientVersion,true);
+    if(!state.license_key)return {ok:true,entitled:false,state:"NOT_ACTIVATED"};
+    if(!state.lease_token)return validateLicense(clientVersion);
     const installation_id=await getInstallationId();
     const result=await post("lease",{lease_token:text(state.lease_token,4096),installation_id,client_version:text(clientVersion,32)});
-    if(result.network)return evaluateLocalLease();
+    if(result.network)return {ok:false,entitled:false,state:"NETWORK_UNAVAILABLE",message:"Não foi possível renovar a licença com o servidor."};
     if(!result.body?.ok){
       const failure=mapFailure(result.body);
       await chrome.storage.local.set({license_status:failure.state,last_validation_at:now()});
       return {...failure,entitled:false};
     }
     await persistSuccess(result.body);
-    return evaluateLocalLease();
+    const license=normalizedLicense(result.body);
+    const status=license.status.toUpperCase();
+    const entitled=status!=="REVOKED"&&status!=="EXPIRED"&&license.activated===true;
+    return {ok:true,entitled,state:entitled?(status==="TRIAL"||status==="TRIAL_ACTIVE"?"TRIAL_ACTIVE":"LICENSE_ACTIVE"):"NOT_ACTIVATED",plan:license.plan,expires_at:license.expires_at,lease_expires_at:safeDate(result.body.lease_expires_at),license};
   })().finally(()=>{refreshPromise=null});
   return refreshPromise;
 }
 
-async function evaluateLocalLease(){
-  const state=await readState();
-  if(state.clock_rollback_detected===true)return {entitled:false,state:"CLOCK_ROLLBACK",plan:text(state.license_plan,64),expires_at:safeDate(state.license_expires_at),lease_expires_at:safeDate(state.lease_expires_at)};
-  const licenseExpiry=parseServerTime(state.license_expires_at);
-  const leaseExpiry=parseServerTime(state.lease_expires_at);
-  const current=now();
-  const status=text(state.license_status,64).toUpperCase();
-  if(status==="REVOKED")return {entitled:false,state:"REVOKED",plan:text(state.license_plan,64),expires_at:safeDate(state.license_expires_at),lease_expires_at:safeDate(state.lease_expires_at)};
-  if(licenseExpiry&&current>=licenseExpiry)return {entitled:false,state:"EXPIRED",plan:text(state.license_plan,64),expires_at:safeDate(state.license_expires_at),lease_expires_at:safeDate(state.lease_expires_at)};
-  if(leaseExpiry&&current<leaseExpiry)return {entitled:true,state:status==="TRIAL"||status==="TRIAL_ACTIVE"?"TRIAL_ACTIVE":"LICENSE_ACTIVE",plan:text(state.license_plan,64),expires_at:safeDate(state.license_expires_at),lease_expires_at:safeDate(state.lease_expires_at)};
-  return {entitled:false,state:"LEASE_EXPIRED",plan:text(state.license_plan,64),expires_at:safeDate(state.license_expires_at),lease_expires_at:safeDate(state.lease_expires_at)};
-}
-
 export async function getLicenseStatus(){
   const state=await readState();
-  const evaluated=await evaluateLocalLease();
-  return {ok:true,...evaluated,license_key_present:!!state.license_key,server_time:safeDate(state.last_server_time),clock_rollback_detected:state.clock_rollback_detected===true};
+  const status=text(state.license_status,64).toUpperCase();
+  return {
+    ok:true,
+    entitled:false,
+    state:status==="REVOKED"?"REVOKED":status==="EXPIRED"?"EXPIRED":state.license_key?"NOT_VALIDATED":"NOT_ACTIVATED",
+    plan:text(state.license_plan,64),
+    expires_at:safeDate(state.license_expires_at),
+    lease_expires_at:safeDate(state.lease_expires_at),
+    license_key_present:!!state.license_key,
+    server_time:safeDate(state.last_server_time),
+    clock_rollback_detected:state.clock_rollback_detected===true
+  };
 }
 
 export async function authorizePaidOperation(clientVersion="1.9.0"){
-  const status=await getLicenseStatus();
-  if(status.clock_rollback_detected)return status;
-  if(status.entitled)return status;
-  if(status.state==="NOT_ACTIVATED")return status;
-  if(status.state==="LEASE_EXPIRED"||status.state==="NETWORK_UNAVAILABLE"){
-    const refreshed=await refreshLease(clientVersion);
-    if(refreshed?.entitled)return refreshed;
-    if(refreshed?.state!=="LEASE_EXPIRED")return refreshed;
-  }
-  return status;
+  // Paid operations are deliberately server-authoritative. Never grant access
+  // from client-editable chrome.storage.local lease timestamps.
+  return validateLicense(clientVersion);
 }
 
 export async function ensureRefreshAlarm(){
@@ -190,11 +194,10 @@ export async function ensureRefreshAlarm(){
 export async function initializeLicensing(){
   await getInstallationId();
   await ensureRefreshAlarm();
+  // Refresh only for state/UI maintenance; authorization itself always validates
+  // against Keymaster and never relies on this cached result.
   const state=await readState();
-  if(state.license_key&&state.lease_token){
-    const leaseExpiry=parseServerTime(state.lease_expires_at);
-    if(!leaseExpiry||leaseExpiry-now()<2*60*60*1000)void refreshLease();
-  }
+  if(state.license_key&&state.lease_token)void refreshLease();
 }
 
 export const LICENSE_REFRESH_ALARM=REFRESH_ALARM;
