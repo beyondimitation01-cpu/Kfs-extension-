@@ -44,3 +44,5 @@ jobs:
           fi
           git commit -m "feat: enforce Keymaster licensing in extension"
           git push
+
+# KFS licensing integration is intentionally applied by CI so the original background implementation is preserved verbatim.
