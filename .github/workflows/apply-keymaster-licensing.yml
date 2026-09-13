@@ -22,7 +22,8 @@ jobs:
         with:
           node-version: 20
 
-      - name: Apply integration
+      - name: Apply one-time control-plane repair
+        if: hashFiles('.kfs-license-repair-needed') != ''
         run: node scripts/apply-keymaster-licensing.mjs
 
       - name: Validate syntax and manifest
@@ -48,16 +49,18 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Commit integration
+      - name: Commit one-time repair
+        if: hashFiles('.kfs-license-repair-needed') != ''
         run: |
+          rm -f .kfs-license-repair-needed
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add background.js content/cleaner.js manifest.json popup.html
+          git add background.js licensing.js content/license-gate.js .kfs-license-repair-needed
           if git diff --cached --quiet; then
-            echo "No integration changes required"
+            echo "No repair changes required"
             exit 0
           fi
-          git commit -m "feat: enforce Keymaster licensing in extension"
+          git commit -m "fix: normalize Keymaster licensing runtime"
           git push
 
-# KFS licensing integration is intentionally applied by CI so the original background implementation is preserved verbatim.
+# After the one-time repair, CI verifies and packages without rewriting runtime source.
