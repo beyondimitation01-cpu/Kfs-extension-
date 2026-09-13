@@ -21,6 +21,13 @@ for(const type of protectedTypes){
   if(!bg.includes(guardNeedle))bg=bg.replace(prefix,guardNeedle);
 }
 
+const downloadPrefix='if(message.type==="KFS_DOWNLOAD_REPO"){';
+const downloadGuard=guard.slice(1,-1);
+if(!bg.includes(`${downloadPrefix}${downloadGuard}`)){
+  if(!bg.includes(downloadPrefix))throw new Error("protected download handler anchor missing");
+  bg=bg.replace(downloadPrefix,`${downloadPrefix}${downloadGuard}`);
+}
+
 // Keep license validation server-authoritative but prevent concurrent callers from creating duplicate in-flight requests.
 let licensing=fs.readFileSync(licensingPath,"utf8");
 if(!licensing.includes("validationPromise")){
