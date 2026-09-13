@@ -1,59 +1,49 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 
 const bgPath="background.js";
-const cleanerPath="content/cleaner.js";
-const manifestPath="manifest.json";
-const popupPath="popup.html";
+const licensingPath="licensing.js";
+const guard="{const denial=await kfsLicenseDenial();if(denial)return sendResponse(denial);}";
+const guardRunRe=/(?:\{const denial=await kfsLicenseDenial\(\);if\(denial\)return sendResponse\(denial\);\})+/g;
+const protectedTypes=["KFS_COMMAND","KFS_ENHANCE","KFS_REMOVE_LOVABLE_BRANDING"];
+const startupTail='if(!await gateAllowsExecution())return sendResponse({ok:false,reason:"startup_gate",message:"Conclua a tela de acesso da Killers from Sagres."});';
 
 let bg=fs.readFileSync(bgPath,"utf8");
-if(!bg.includes('from "./licensing.js"')){
-  bg=`import {authorizePaidOperation,initializeLicensing,startTrial,activateLicense,deactivateLicense,getLicenseStatus,refreshLease,LICENSE_REFRESH_ALARM} from "./licensing.js";\n${bg}`;
-}
-if(!bg.includes("function kfsLicenseDenial")){
-  const anchor='async function getConfig()';
-  if(!bg.includes(anchor))throw new Error("background insertion anchor missing: getConfig");
-  const helper='async function kfsLicenseDenial(){const s=await authorizePaidOperation("1.9.0");return s.entitled?null:{ok:false,reason:"license_required",state:s.state,code:s.code||undefined,message:s.message||"Licença necessária para esta função."};}';
-  bg=bg.replace(anchor,`${helper}${anchor}`);
-}
-const commandNeedle='if(message.type==="KFS_COMMAND"){if(!await gateAllowsExecution())return sendResponse({ok:false,reason:"startup_gate",message:"Conclua a tela de acesso da Killers from Sagres."});';
-if(!bg.includes(commandNeedle))throw new Error("KFS_COMMAND anchor missing");
-bg=bg.replace(commandNeedle,'if(message.type==="KFS_COMMAND"){if(!await gateAllowsExecution())return sendResponse({ok:false,reason:"startup_gate",message:"Conclua a tela de acesso da Killers from Sagres."});{const denial=await kfsLicenseDenial();if(denial)return sendResponse(denial);}');
-const enhanceNeedle='if(message.type==="KFS_ENHANCE"){if(!await gateAllowsExecution())return sendResponse({ok:false,reason:"startup_gate",message:"Conclua a tela de acesso da Killers from Sagres."});';
-if(!bg.includes(enhanceNeedle))throw new Error("KFS_ENHANCE anchor missing");
-bg=bg.replace(enhanceNeedle,'if(message.type==="KFS_ENHANCE"){if(!await gateAllowsExecution())return sendResponse({ok:false,reason:"startup_gate",message:"Conclua a tela de acesso da Killers from Sagres."});{const denial=await kfsLicenseDenial();if(denial)return sendResponse(denial);}');
-const brandNeedle='if(message.type==="KFS_REMOVE_LOVABLE_BRANDING"){if(!await gateAllowsExecution())return sendResponse({ok:false,reason:"startup_gate",message:"Conclua a tela de acesso da Killers from Sagres."});';
-if(!bg.includes(brandNeedle))throw new Error("branding anchor missing");
-bg=bg.replace(brandNeedle,'if(message.type==="KFS_REMOVE_LOVABLE_BRANDING"){if(!await gateAllowsExecution())return sendResponse({ok:false,reason:"startup_gate",message:"Conclua a tela de acesso da Killers from Sagres."});{const denial=await kfsLicenseDenial();if(denial)return sendResponse(denial);}');
 
-const saveNeedle='if(message.type==="KFS_SAVE_CONFIG"){const allowed=';
-const guardedSaveNeedle='if(message.type==="KFS_SAVE_CONFIG"){if(message.patch?.hideLovableBranding===true){const denial=await kfsLicenseDenial();if(denial)return sendResponse(denial);}const allowed=';
-if(!bg.includes(saveNeedle)&&!bg.includes(guardedSaveNeedle))throw new Error("KFS_SAVE_CONFIG anchor missing");
-if(bg.includes(saveNeedle))bg=bg.replace(saveNeedle,guardedSaveNeedle);
+// The original repair inserted licensing into the command path. Normalize any accumulated copies.
+bg=bg.replace(guardRunRe,guard);
 
-const licensingMessages='if(message.type==="KFS_LICENSE_STATUS")return sendResponse(await getLicenseStatus());if(message.type==="KFS_LICENSE_TRIAL")return sendResponse(await startTrial("1.9.0"));if(message.type==="KFS_LICENSE_ACTIVATE")return sendResponse(await activateLicense(message.license_key,"1.9.0"));if(message.type==="KFS_LICENSE_DEACTIVATE")return sendResponse(await deactivateLicense("1.9.0"));';
-const messageAnchor='if(message.type==="KFS_GATE_STATUS")return sendResponse(await getGateState());';
-if(!bg.includes(messageAnchor))throw new Error("message insertion anchor missing");
-if(!bg.includes("KFS_LICENSE_STATUS"))bg=bg.replace(messageAnchor,`${messageAnchor}${licensingMessages}`);
-
-if(!bg.includes(`chrome.alarms.onAlarm.addListener`)){
-  bg+=`\nvoid initializeLicensing();\nchrome.alarms.onAlarm.addListener((alarm)=>{if(alarm?.name===LICENSE_REFRESH_ALARM)void refreshLease("1.9.0");});\n`;
+// If a protected operation has no guard, add exactly one immediately after its startup-gate check.
+for(const type of protectedTypes){
+  const prefix=`if(message.type==="${type}"){${startupTail}`;
+  const guardNeedle=`${prefix}${guard}`;
+  if(!bg.includes(prefix))throw new Error(`protected handler anchor missing: ${type}`);
+  if(!bg.includes(guardNeedle))bg=bg.replace(prefix,guardNeedle);
 }
+
+// Keep license validation server-authoritative but prevent concurrent callers from creating duplicate in-flight requests.
+let licensing=fs.readFileSync(licensingPath,"utf8");
+if(!licensing.includes("validationPromise")){
+  const stateDecl='let installationPromise=null,refreshPromise=null,statusCache=null,statusCacheUntil=0;';
+  if(!licensing.includes(stateDecl))throw new Error("licensing state declaration missing");
+  licensing=licensing.replace(stateDecl,'let installationPromise=null,refreshPromise=null,statusCache=null,statusCacheUntil=0,validationPromise=null;');
+  const start=licensing.indexOf('export async function validateLicense(');
+  const end=licensing.indexOf('\nexport async function refreshLease',start);
+  if(start<0||end<0)throw new Error("validateLicense boundaries missing");
+  const original=licensing.slice(start,end);
+  const bodyStart=original.indexOf('{');
+  const body=original.slice(bodyStart+1,-1);
+  const replacement=`export async function validateLicense(clientVersion="1.9.0"){if(validationPromise)return validationPromise;validationPromise=(async()=>{${body}})();try{return await validationPromise}finally{validationPromise=null}}`;
+  licensing=licensing.slice(0,start)+replacement+licensing.slice(end);
+}
+fs.writeFileSync(licensingPath,licensing);
+
+// Refresh the integrity hash only when the license-gate file itself is changed by this repair.
+const licenseGatePath="content/license-gate.js";
+const licenseGate=fs.readFileSync(licenseGatePath,"utf8");
+const hash=crypto.createHash("sha256").update(licenseGate).digest("hex");
+const hashRe=/("content\/license-gate\\.js":")[a-f0-9]{64}(")/;
+if(hashRe.test(bg))bg=bg.replace(hashRe,`$1${hash}$2`);
+
 fs.writeFileSync(bgPath,bg);
-
-let cleaner=fs.readFileSync(cleanerPath,"utf8");
-if(!cleaner.includes("kfsBrandingAuthorized")){
-  cleaner=cleaner.replace('let config={hideLovableBranding:false};','let config={hideLovableBranding:false};let kfsBrandingAuthorized=false;let kfsBrandingAuthPromise=null;async function refreshBrandingAuthorization(){if(kfsBrandingAuthPromise)return kfsBrandingAuthPromise;kfsBrandingAuthPromise=chrome.runtime.sendMessage({type:"KFS_LICENSE_STATUS"}).then(r=>{kfsBrandingAuthorized=r?.entitled===true;return kfsBrandingAuthorized}).catch(()=>false).finally(()=>{kfsBrandingAuthPromise=null});return kfsBrandingAuthPromise}');
-  cleaner=cleaner.replace('function apply(){if(!config.hideLovableBranding){restore();if(heartbeat){clearInterval(heartbeat);heartbeat=null}return}hideBranding();if(!heartbeat)heartbeat=setInterval(()=>{if(!document.hidden)hideBranding()},1200)}','async function apply(){if(!config.hideLovableBranding){restore();if(heartbeat){clearInterval(heartbeat);heartbeat=null}return}if(!(await refreshBrandingAuthorization())){restore();if(heartbeat){clearInterval(heartbeat);heartbeat=null}return}hideBranding();if(!heartbeat)heartbeat=setInterval(()=>{if(!document.hidden)hideBranding()},1200)}');
-  cleaner=cleaner.replace('if(message?.type==="KFS_BRANDING_APPLY"){config.hideLovableBranding=true;const removed=hideBranding();sendResponse({ok:true,removed});return}','if(message?.type==="KFS_BRANDING_APPLY"){refreshBrandingAuthorization().then(authorized=>{if(!authorized){sendResponse({ok:false,reason:"license_required"});return}config.hideLovableBranding=true;const removed=hideBranding();sendResponse({ok:true,removed})});return true}');
-}
-fs.writeFileSync(cleanerPath,cleaner);
-
-const manifest=JSON.parse(fs.readFileSync(manifestPath,"utf8"));
-manifest.permissions=[...new Set([...(manifest.permissions||[]),"alarms"])];
-fs.writeFileSync(manifestPath,JSON.stringify(manifest));
-
-let popup=fs.readFileSync(popupPath,"utf8");
-if(!popup.includes('license-ui.js'))popup=popup.replace('</body>','<script src="license-ui.js"></script></body>');
-fs.writeFileSync(popupPath,popup);
-
-console.log("Keymaster licensing integration applied.");
+console.log("KFS Keymaster repair normalized successfully.");
